@@ -29,6 +29,7 @@
   },
   "peerDependencies": {
     "@codemirror/language": "*",
+    "@lezer/common": "^1.2.1",
     "@lezer/highlight": "*",
     "@lezer/lr": "^1.4.0"
   },
