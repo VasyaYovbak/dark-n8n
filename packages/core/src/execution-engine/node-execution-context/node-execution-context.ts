@@ -51,6 +51,9 @@ import { generateUrlSignature, prepareUrlForSigning } from '../../utils/signatur
 export abstract class NodeExecutionContext implements Omit<FunctionsBase, 'getCredentials'> {
 	protected readonly instanceSettings = Container.get(InstanceSettings);
 
+	// Private field for logger to support getter/setter
+	private _logger?: Logger;
+
 	constructor(
 		readonly workflow: Workflow,
 		readonly node: INode,
@@ -62,9 +65,17 @@ export abstract class NodeExecutionContext implements Omit<FunctionsBase, 'getCr
 		readonly executeData?: IExecuteData,
 	) {}
 
-	@Memoized
+	// Getter with lazy initialization from Container
 	get logger() {
-		return Container.get(Logger);
+		if (!this._logger) {
+			this._logger = Container.get(Logger);
+		}
+		return this._logger;
+	}
+
+	// Setter to allow logger replacement
+	set logger(value: Logger) {
+		this._logger = value;
 	}
 
 	getExecutionId() {

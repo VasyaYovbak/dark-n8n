@@ -102,8 +102,8 @@ function getSandbox(
 
 	sandbox.on(
 		'output',
-		workflowMode === 'manual'
-			? this.sendMessageToUI.bind(this)
+		workflowMode === 'manual' || workflowMode === 'integrated'
+			? (...args: any[]) => (this as any).sendMessageToUI(...args)
 			: (...args: unknown[]) =>
 					console.log(`[Workflow "${this.getWorkflow().id}"][Node "${node.name}"]`, ...args),
 	);

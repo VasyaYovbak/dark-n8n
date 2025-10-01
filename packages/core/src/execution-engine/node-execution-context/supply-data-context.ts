@@ -115,6 +115,72 @@ export class SupplyDataContext extends BaseExecuteContext implements ISupplyData
 				fallbackValue,
 				options,
 			)) as ISupplyDataFunctions['getNodeParameter'];
+
+		// Auto-inject parent methods if they exist in additionalData
+		// This allows sub-workflows to inherit methods like sendChunk from parent context
+		this._injectParentMethods();
+	}
+
+	private _injectParentMethods(): void {
+		const logger = this.logger;
+		const parentMethods = (this.additionalData as any)._parentMethods;
+
+		logger?.info(
+			`🔍 SupplyDataContext: Checking for _parentMethods in additionalData, found: ${!!parentMethods}`,
+		);
+
+		if (!parentMethods) {
+			logger?.info('⚠️ SupplyDataContext: No _parentMethods found, skipping injection');
+			return;
+		}
+
+		logger?.info(
+			'🔗 Injecting parent methods from additionalData._parentMethods into SupplyDataContext',
+		);
+
+		const contextAny = this as any;
+
+		// Inject each available parent method
+		if (typeof parentMethods.sendChunk === 'function') {
+			contextAny.sendChunk = parentMethods.sendChunk;
+			logger?.info('✅ Injected sendChunk from parent context');
+		}
+
+		if (typeof parentMethods.sendResponse === 'function') {
+			contextAny.sendResponse = parentMethods.sendResponse;
+			logger?.info('✅ Injected sendResponse from parent context');
+		}
+
+		if (typeof parentMethods.sendMessageToUI === 'function') {
+			contextAny.sendMessageToUI = parentMethods.sendMessageToUI;
+			logger?.info('✅ Injected sendMessageToUI from parent context');
+		}
+
+		if (typeof parentMethods.putExecutionToWait === 'function') {
+			contextAny.putExecutionToWait = parentMethods.putExecutionToWait;
+			logger?.info('✅ Injected putExecutionToWait from parent context');
+		}
+
+		if (typeof parentMethods.isStreaming === 'function') {
+			contextAny.isStreaming = parentMethods.isStreaming;
+			logger?.info('✅ Injected isStreaming from parent context');
+		}
+
+		if (typeof parentMethods.getExecutionDataById === 'function') {
+			contextAny.getExecutionDataById = parentMethods.getExecutionDataById;
+		}
+
+		if (typeof parentMethods.addExecutionHints === 'function') {
+			contextAny.addExecutionHints = parentMethods.addExecutionHints;
+		}
+
+		if (parentMethods.logger) {
+			contextAny.logger = parentMethods.logger;
+		}
+
+		logger?.info(
+			`✅ Successfully injected ${Object.keys(parentMethods).length} parent methods into SupplyDataContext`,
+		);
 	}
 
 	cloneWith(replacements: {

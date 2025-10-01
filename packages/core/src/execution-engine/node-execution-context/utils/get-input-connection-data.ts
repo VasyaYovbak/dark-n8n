@@ -39,6 +39,19 @@ import { SupplyDataContext } from '../../node-execution-context/supply-data-cont
 import { ExecuteContext } from '../../node-execution-context/execute-context';
 import { isEngineRequest } from '../../requests-response';
 
+// Node types that require enhanced ExecuteContext with full IExecuteFunctions capability
+const NODE_TYPES_REQUIRING_ENHANCED_CONTEXT = [
+	'@n8n/n8n-nodes-langchain.darkAgentTool',
+	'@n8n/n8n-nodes-langchain.toolDarkWorkflow',
+] as const;
+
+/**
+ * Checks if a node type requires enhanced context with full IExecuteFunctions methods
+ */
+function requiresEnhancedContext(nodeType: string): boolean {
+	return NODE_TYPES_REQUIRING_ENHANCED_CONTEXT.includes(nodeType as any);
+}
+
 function getNextRunIndex(runExecutionData: IRunExecutionData, nodeName: string) {
 	return runExecutionData.resultData.runData[nodeName]?.length ?? 0;
 }
@@ -129,14 +142,14 @@ export function makeHandleToolInvocation(
 			// Increment the runIndex for the next invocation
 			const localRunIndex = runIndex++;
 
-			// Use ExecuteContext for DarkAdvancedAgentTool to provide full IExecuteFunctions
+			// Use ExecuteContext for nodes requiring full IExecuteFunctions
 			const logger = Container.get(Logger);
 			logger.info(`🚀 makeHandleToolInvocation for node: ${node.name} (type: ${node.type})`);
 
 			let context: ISupplyDataFunctions | IExecuteFunctions;
 
-			if (node.type === '@n8n/n8n-nodes-langchain.darkAgentTool' && executeContextFactory) {
-				logger.info(`✨ Creating hybrid context for DarkAdvancedAgentTool: ${node.name}`);
+			if (requiresEnhancedContext(node.type) && executeContextFactory) {
+				logger.info(`✨ Creating hybrid context for ${node.name}`);
 
 				// First create SupplyDataContext with all the necessary data and state
 				const supplyContext = contextFactory(localRunIndex);
@@ -147,43 +160,7 @@ export function makeHandleToolInvocation(
 				logger.info(`⚡ Created ExecuteContext with full IExecuteFunctions capability`);
 
 				context = supplyContext as unknown as IExecuteFunctions;
-				const contextAny = context as any;
-
-				// Core IExecuteFunctions methods
-				contextAny.sendChunk = executeContext.sendChunk?.bind(executeContext);
-				contextAny.sendResponse = executeContext.sendResponse?.bind(executeContext);
-				contextAny.sendMessageToUI = executeContext.sendMessageToUI?.bind(executeContext);
-				contextAny.putExecutionToWait = executeContext.putExecutionToWait?.bind(executeContext);
-				contextAny.isStreaming = executeContext.isStreaming?.bind(executeContext);
-
-				// Execution control methods
-				contextAny.getExecutionDataById = executeContext.getExecutionDataById?.bind(executeContext);
-				contextAny.addExecutionHints = executeContext.addExecutionHints?.bind(executeContext);
-
-				// Node helper methods (if different from supplyContext)
-				if (executeContext.nodeHelpers && executeContext.nodeHelpers !== contextAny.nodeHelpers) {
-					contextAny.nodeHelpers = executeContext.nodeHelpers;
-				}
-
-				// Helper functions enhancement
-				if (executeContext.helpers) {
-					contextAny.helpers = {
-						...contextAny.helpers,
-						...executeContext.helpers,
-					};
-				}
-
-				logger.info(
-					`🔧 Enhanced context with ${
-						Object.keys({
-							sendChunk: 1,
-							sendResponse: 1,
-							sendMessageToUI: 1,
-							putExecutionToWait: 1,
-							isStreaming: 1,
-						}).length
-					} additional IExecuteFunctions methods`,
-				);
+				enhanceContextWithExecuteFunctions(supplyContext, executeContext, node.name);
 
 				logger.info(`🔄 Using hybrid context (SupplyData + ExecuteFunctions) for ${node.name}`);
 			} else {
@@ -268,6 +245,49 @@ export function makeHandleToolInvocation(
 
 		return 'Error during node execution : ' + (lastError?.description ?? lastError?.message);
 	};
+}
+
+/**
+ * Enhances a context with additional IExecuteFunctions methods from ExecuteContext
+ * Used for nodes that require full execution capabilities (e.g., DarkAdvancedAgentTool)
+ */
+function enhanceContextWithExecuteFunctions(
+	context: ISupplyDataFunctions,
+	executeContext: IExecuteFunctions,
+	nodeName: string,
+): void {
+	const logger = Container.get(Logger);
+	const contextAny = context as any;
+
+	// Core IExecuteFunctions methods
+	contextAny.sendChunk = executeContext.sendChunk?.bind(executeContext);
+	contextAny.sendResponse = executeContext.sendResponse?.bind(executeContext);
+	contextAny.sendMessageToUI = executeContext.sendMessageToUI?.bind(executeContext);
+	contextAny.putExecutionToWait = executeContext.putExecutionToWait?.bind(executeContext);
+	contextAny.isStreaming = executeContext.isStreaming?.bind(executeContext);
+
+	// Execution control methods
+	contextAny.getExecutionDataById = executeContext.getExecutionDataById?.bind(executeContext);
+	contextAny.addExecutionHints = executeContext.addExecutionHints?.bind(executeContext);
+
+	// Node helper methods (if different from supplyContext)
+	if (executeContext.nodeHelpers && executeContext.nodeHelpers !== contextAny.nodeHelpers) {
+		contextAny.nodeHelpers = executeContext.nodeHelpers;
+	}
+
+	// Helper functions enhancement
+	if (executeContext.helpers) {
+		contextAny.helpers = {
+			...contextAny.helpers,
+			...executeContext.helpers,
+		};
+	}
+
+	if (executeContext.logger) {
+		contextAny.logger = executeContext.logger;
+	}
+
+	logger.info(`🔧 Enhanced context with additional IExecuteFunctions methods for ${nodeName}`);
 }
 
 function validateInputConfiguration(
@@ -379,35 +399,29 @@ export async function getInputConnectionData(
 				parentNode,
 			);
 
-		// Create ExecuteContext factory for DarkAdvancedAgentTool
+		// Create ExecuteContext factory for nodes requiring enhanced context
 		const logger = Container.get(Logger);
 		logger.info(`🔍 Node type: ${connectedNode.type}, name: ${connectedNode.name}`);
-		const executeContextFactory =
-			connectedNode.type === '@n8n/n8n-nodes-langchain.darkAgentTool'
-				? (runIndex: number) => {
-						logger.info(
-							`✅ Creating ExecuteContext for DarkAdvancedAgentTool (${connectedNode.name})`,
-						);
-						const exec_context = new ExecuteContext(
-							workflow,
-							connectedNode,
-							additionalData,
-							mode,
-							runExecutionData,
-							runIndex,
-							connectionInputData,
-							{}, // inputData
-							executeData,
-							closeFunctions,
-							abortSignal,
-						);
-						logger.info(
-							`✅ ExecuteContext CREATED for DarkAdvancedAgentTool (${connectedNode.name})`,
-						);
-
-						return exec_context;
-					}
-				: undefined;
+		const executeContextFactory = requiresEnhancedContext(connectedNode.type)
+			? (runIndex: number) => {
+					logger.info(`✅ Creating ExecuteContext for ${connectedNode.name}`);
+					const execContext = new ExecuteContext(
+						workflow,
+						connectedNode,
+						additionalData,
+						mode,
+						runExecutionData,
+						runIndex,
+						connectionInputData,
+						{}, // inputData
+						executeData,
+						closeFunctions,
+						abortSignal,
+					);
+					logger.info(`✅ ExecuteContext CREATED for ${connectedNode.name}`);
+					return execContext;
+				}
+			: undefined;
 		if (executeContextFactory) {
 			logger.info(`🎯 ExecuteContextFactory created for ${connectedNode.name}`);
 		} else {
@@ -434,7 +448,23 @@ export async function getInputConnectionData(
 				});
 			}
 		} else {
-			const context = contextFactory(parentRunIndex, parentInputData);
+			let context = contextFactory(parentRunIndex, parentInputData);
+
+			// Enhanced context for nodes requiring full IExecuteFunctions with supplyData
+			if (requiresEnhancedContext(connectedNode.type) && executeContextFactory) {
+				logger.info(
+					`✨ Creating hybrid context for ${connectedNode.type} with supplyData: ${connectedNode.name}`,
+				);
+
+				// Create ExecuteContext with full IExecuteFunctions methods
+				const executeContext = executeContextFactory(parentRunIndex);
+				logger.info(
+					`⚡ Created ExecuteContext with full IExecuteFunctions capability for supplyData`,
+				);
+
+				enhanceContextWithExecuteFunctions(context, executeContext, connectedNode.name);
+			}
+
 			try {
 				const supplyData = await connectedNodeType.supplyData.call(context, itemIndex);
 				if (supplyData.closeFunction) {

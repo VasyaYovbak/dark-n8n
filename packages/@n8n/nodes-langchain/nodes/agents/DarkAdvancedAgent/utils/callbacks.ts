@@ -134,8 +134,8 @@ function getSandboxForCallback(
 
 	sandbox.on(
 		'output',
-		workflowMode === 'manual'
-			? ctx.sendMessageToUI.bind(ctx)
+		workflowMode === 'manual' || workflowMode === 'integrated'
+			? (...args: any[]) => (ctx as any).sendMessageToUI(...args)
 			: (...args: unknown[]) =>
 					console.log(`[Workflow "${ctx.getWorkflow().id}"][Node "${node.name}"]`, ...args),
 	);

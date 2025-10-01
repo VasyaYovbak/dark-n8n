@@ -128,6 +128,7 @@
       "dist/nodes/tools/ToolWikipedia/ToolWikipedia.node.js",
       "dist/nodes/tools/ToolWolframAlpha/ToolWolframAlpha.node.js",
       "dist/nodes/tools/ToolWorkflow/ToolWorkflow.node.js",
+      "dist/nodes/tools/ToolDarkWorkflow/ToolDarkWorkflow.node.js",
       "dist/nodes/trigger/ManualChatTrigger/ManualChatTrigger.node.js",
       "dist/nodes/trigger/ChatTrigger/ChatTrigger.node.js",
       "dist/nodes/trigger/ChatTrigger/Chat.node.js",

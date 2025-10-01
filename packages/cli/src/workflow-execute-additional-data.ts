@@ -240,6 +240,15 @@ async function startExecution(
 		// Propagate streaming state to subworkflows
 		additionalDataIntegrated.streamingEnabled = additionalData.streamingEnabled;
 
+		// Propagate parent methods to subworkflows
+		// This allows sub-workflows to inherit methods like sendChunk from parent context
+		if ((additionalData as any)._parentMethods) {
+			(additionalDataIntegrated as any)._parentMethods = (additionalData as any)._parentMethods;
+			Container.get(Logger).info(
+				`🔗 Propagating _parentMethods to sub-workflow execution (${Object.keys((additionalData as any)._parentMethods).length} methods)`,
+			);
+		}
+
 		let subworkflowTimeout = additionalData.executionTimeoutTimestamp;
 		const workflowSettings = workflowData.settings;
 		if (workflowSettings?.executionTimeout !== undefined && workflowSettings.executionTimeout > 0) {
