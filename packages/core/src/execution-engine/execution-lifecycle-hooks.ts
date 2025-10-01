@@ -91,6 +91,9 @@ export class ExecutionLifecycleHooks {
 		sendChunk: [],
 	};
 
+	/** @deprecated Internal use only - for UI tracking propagation */
+	pushRef?: string;
+
 	constructor(
 		readonly mode: WorkflowExecuteMode,
 		readonly executionId: string,

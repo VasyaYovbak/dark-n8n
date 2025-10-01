@@ -2561,6 +2561,7 @@ export interface IWorkflowExecutionDataProcess {
 	pinData?: IPinData;
 	retryOf?: string | null;
 	pushRef?: string;
+	parentExecutionId?: string; // For sub-workflows, ID of the parent execution to use in UI events
 	startNodes?: StartNodeData[];
 	workflowData: IWorkflowBase;
 	userId?: string;

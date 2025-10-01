@@ -159,6 +159,14 @@ export async function executeWorkflow(
 		options.loadedRunData ??
 		(await getRunData(workflowData, options.inputData, options.parentExecution));
 
+	// Propagate pushRef and executionId from parent execution to sub-workflow for UI tracking
+	if (additionalData.hooks?.pushRef && !runData.pushRef) {
+		runData.pushRef = additionalData.hooks.pushRef;
+	}
+	if (additionalData.executionId && !runData.parentExecutionId) {
+		runData.parentExecutionId = additionalData.executionId;
+	}
+
 	const executionId = await activeExecutions.add(runData);
 
 	const executionPromise = startExecution(
@@ -226,7 +234,10 @@ async function startExecution(
 			executionId,
 			workflowData,
 			additionalData.userId,
+			runData.pushRef,
+			runData.parentExecutionId,
 		);
+
 		additionalDataIntegrated.executionId = executionId;
 		additionalDataIntegrated.parentCallbackManager = options.parentCallbackManager;
 

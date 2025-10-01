@@ -160,6 +160,10 @@ function hookFunctionsPush(
 	{ pushRef, retryOf }: HooksSetupParameters,
 ) {
 	if (!pushRef) return;
+
+	// Store pushRef in hooks so it can be accessed by sub-workflows
+	hooks.pushRef = pushRef;
+
 	const logger = Container.get(Logger);
 	const pushInstance = Container.get(Push);
 	hooks.addHandler('nodeExecuteBefore', function (nodeName, data) {
@@ -262,6 +266,81 @@ function hookFunctionsPush(
 	});
 }
 
+/**
+ * Special version of hookFunctionsPush for sub-workflows that only sends
+ * node execution events, not workflow execution events. This prevents
+ * the UI from being cleared when a sub-workflow starts.
+ */
+function hookFunctionsPushForSubWorkflow(
+	hooks: ExecutionLifecycleHooks,
+	{ pushRef, parentExecutionId }: HooksSetupParameters & { parentExecutionId?: string },
+) {
+	if (!pushRef) return;
+
+	// Store pushRef in hooks so it can be accessed by nested sub-workflows
+	hooks.pushRef = pushRef;
+
+	const logger = Container.get(Logger);
+	const pushInstance = Container.get(Push);
+
+	// Only add node execution handlers to avoid clearing the UI
+	hooks.addHandler('nodeExecuteBefore', function (nodeName, data) {
+		const displayExecutionId = parentExecutionId || this.executionId;
+
+		logger.debug(`Sub-workflow executing node "${nodeName}" (hookFunctionsPushForSubWorkflow)`, {
+			realExecutionId: this.executionId,
+			displayExecutionId,
+			nodeName,
+			pushRef,
+			workflowId: this.workflowData.id,
+		});
+
+		pushInstance.send(
+			{ type: 'nodeExecuteBefore', data: { executionId: displayExecutionId, nodeName, data } },
+			pushRef,
+		);
+	});
+
+	hooks.addHandler('nodeExecuteAfter', function (nodeName, data) {
+		const displayExecutionId = parentExecutionId || this.executionId;
+
+		logger.debug(`Sub-workflow executed node "${nodeName}" (hookFunctionsPushForSubWorkflow)`, {
+			realExecutionId: this.executionId,
+			displayExecutionId,
+			nodeName,
+			pushRef,
+			workflowId: this.workflowData.id,
+		});
+
+		const itemCountByConnectionType = getItemCountByConnectionType(data?.data);
+		const { data: _, ...taskData } = data;
+
+		pushInstance.send(
+			{
+				type: 'nodeExecuteAfter',
+				data: {
+					executionId: displayExecutionId,
+					nodeName,
+					itemCountByConnectionType,
+					data: taskData,
+				},
+			},
+			pushRef,
+		);
+
+		// Send binary data
+		const asBinary = true;
+		pushInstance.send(
+			{
+				type: 'nodeExecuteAfterData',
+				data: { executionId: displayExecutionId, nodeName, itemCountByConnectionType, data },
+			},
+			pushRef,
+			asBinary,
+		);
+	});
+}
+
 function hookFunctionsExternalHooks(hooks: ExecutionLifecycleHooks) {
 	const externalHooks = Container.get(ExternalHooks);
 	hooks.addHandler('workflowExecuteBefore', async function (workflow) {
@@ -311,7 +390,12 @@ function hookFunctionsStatistics(hooks: ExecutionLifecycleHooks) {
  */
 function hookFunctionsSave(
 	hooks: ExecutionLifecycleHooks,
-	{ pushRef, retryOf, saveSettings }: HooksSetupParameters,
+	{
+		pushRef,
+		retryOf,
+		saveSettings,
+		parentExecutionId,
+	}: HooksSetupParameters & { parentExecutionId?: string },
 ) {
 	const logger = Container.get(Logger);
 	const errorReporter = Container.get(ErrorReporter);
@@ -392,6 +476,124 @@ function hookFunctionsSave(
 				workflowId: this.workflowData.id,
 				executionData: fullExecutionData,
 			});
+
+			// If this is a UI-tracked sub-workflow, DON'T delete it yet
+			// It will be merged and deleted when parent execution finishes
+			if (parentExecutionId && pushRef) {
+				logger.debug('Sub-workflow saved - will be merged into parent later', {
+					subExecutionId: this.executionId,
+					parentExecutionId,
+				});
+			}
+
+			// If this is a parent execution with pushRef, merge sub-workflow data NOW
+			if (!parentExecutionId) {
+				logger.debug('🔄 Parent execution finishing - looking for sub-workflows to merge', {
+					parentExecutionId: this.executionId,
+					workflowId: this.workflowData.id,
+					parentStartTime: fullRunData.startedAt,
+				});
+
+				try {
+					// Find all recent sub-executions (metadata only)
+					const subExecutions = await executionRepository.find({
+						where: {
+							workflowId: this.workflowData.id,
+							mode: 'integrated' as any,
+						},
+						order: { startedAt: 'DESC' as any },
+						take: 10,
+					});
+
+					logger.debug('📋 Found sub-executions from database', {
+						count: subExecutions.length,
+						ids: subExecutions.map((e: any) => e.id),
+					});
+
+					const currentRunData = fullRunData.data.resultData.runData;
+					const subExecutionsToDelete: string[] = [];
+					const parentStartTime = new Date(fullRunData.startedAt).getTime();
+
+					for (const subExec of subExecutions) {
+						const subExecAny = subExec as any;
+						const subStartTime = new Date(subExecAny.startedAt).getTime();
+
+						// Only process if sub-execution started after parent
+						if (subStartTime >= parentStartTime) {
+							// Load full execution data including executionData
+							const fullSubExecution = await executionRepository.findSingleExecution(
+								subExecAny.id,
+								{
+									includeData: true,
+									unflattenData: true,
+								},
+							);
+
+							logger.debug('🔍 Loaded full sub-execution', {
+								subId: subExecAny.id,
+								hasFullExecution: !!fullSubExecution,
+								hasData: !!fullSubExecution?.data,
+								hasResultData: !!fullSubExecution?.data?.resultData,
+								hasRunData: !!fullSubExecution?.data?.resultData?.runData,
+								nodeCount: fullSubExecution?.data?.resultData?.runData
+									? Object.keys(fullSubExecution.data.resultData.runData).length
+									: 0,
+							});
+
+							if (fullSubExecution?.data?.resultData?.runData) {
+								const subRunData = fullSubExecution.data.resultData.runData;
+
+								logger.debug('🔗 Merging sub-execution', {
+									subId: subExecAny.id,
+									nodes: Object.keys(subRunData),
+								});
+
+								for (const [nodeName, nodeData] of Object.entries(subRunData)) {
+									currentRunData[nodeName] = nodeData as any;
+								}
+
+								subExecutionsToDelete.push(subExecAny.id);
+							}
+						}
+					}
+
+					logger.debug('📊 Merge summary', {
+						subExecutionsToDelete: subExecutionsToDelete.length,
+						nodesBeforeMerge: Object.keys(fullRunData.data.resultData.runData).length,
+						nodesAfterMerge: Object.keys(currentRunData).length,
+					});
+
+					if (subExecutionsToDelete.length > 0) {
+						// Update parent with merged data
+						await updateExistingExecution({
+							executionId: this.executionId,
+							workflowId: this.workflowData.id,
+							executionData: fullExecutionData,
+						});
+
+						logger.debug('✅ Merged and re-saved parent with sub-workflow data', {
+							mergedCount: subExecutionsToDelete.length,
+							totalNodes: Object.keys(currentRunData).length,
+						});
+
+						// Delete sub-executions
+						for (const subId of subExecutionsToDelete) {
+							await executionRepository.hardDelete({
+								workflowId: this.workflowData.id,
+								executionId: subId,
+							});
+							logger.debug('🗑️ Deleted sub-execution', { subId });
+						}
+					} else {
+						logger.debug('⚠️ No sub-executions found to merge');
+					}
+				} catch (error) {
+					logger.error('❌ Failed to merge sub-workflows', {
+						error: (error as Error).message,
+						stack: (error as Error).stack,
+					});
+				}
+			}
 
 			if (!isManualMode) {
 				executeErrorWorkflow(this.workflowData, fullRunData, this.mode, this.executionId, retryOf);
@@ -482,15 +684,24 @@ export function getLifecycleHooksForSubExecutions(
 	executionId: string,
 	workflowData: IWorkflowBase,
 	userId?: string,
+	pushRef?: string,
+	parentExecutionId?: string,
 ): ExecutionLifecycleHooks {
 	const hooks = new ExecutionLifecycleHooks(mode, executionId, workflowData);
 	const saveSettings = toSaveSettings(workflowData.settings);
 	hookFunctionsWorkflowEvents(hooks, userId);
 	hookFunctionsNodeEvents(hooks);
 	hookFunctionsFinalizeExecutionStatus(hooks);
-	hookFunctionsSave(hooks, { saveSettings });
+	hookFunctionsSave(hooks, { saveSettings, pushRef, parentExecutionId });
 	hookFunctionsSaveProgress(hooks, { saveSettings });
 	hookFunctionsStatistics(hooks);
+
+	// Enable UI tracking if pushRef is provided (e.g., from Tool Workflow Executor)
+	// Use special sub-workflow version that doesn't send executionStarted/Finished
+	if (pushRef) {
+		hookFunctionsPushForSubWorkflow(hooks, { pushRef, saveSettings, parentExecutionId });
+	}
+
 	hookFunctionsExternalHooks(hooks);
 	return hooks;
 }

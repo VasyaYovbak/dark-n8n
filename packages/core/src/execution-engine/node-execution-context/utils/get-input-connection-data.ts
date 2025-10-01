@@ -43,6 +43,7 @@ import { isEngineRequest } from '../../requests-response';
 const NODE_TYPES_REQUIRING_ENHANCED_CONTEXT = [
 	'@n8n/n8n-nodes-langchain.darkAgentTool',
 	'@n8n/n8n-nodes-langchain.toolDarkWorkflow',
+	'@n8n/n8n-nodes-langchain.toolWorkflowExecutor',
 ] as const;
 
 /**
