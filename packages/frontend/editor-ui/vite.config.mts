@@ -192,7 +192,15 @@ export default mergeConfig(
 			BASE_PATH: `'${publicPath}'`,
 		},
 		plugins,
-		resolve: { alias },
+		resolve: { 
+			alias,
+			dedupe: [
+				'@codemirror/state',
+				'@codemirror/view',
+				'@codemirror/language',
+				'@codemirror/commands',
+			],
+		},
 		base: publicPath,
 		envPrefix: ['VUE', 'N8N_ENV_FEAT'],
 		css: {
