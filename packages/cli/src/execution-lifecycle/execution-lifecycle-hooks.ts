@@ -424,7 +424,8 @@ function hookFunctionsSave(
 	{
 		pushRef,
 		retryOf,
-		saveSettings, parentExecution,
+		saveSettings,
+		parentExecution,
 		parentExecutionId,
 	}: HooksSetupParameters & { parentExecutionId?: string },
 ) {
@@ -732,7 +733,7 @@ export function getLifecycleHooksForSubExecutions(
 	hookFunctionsWorkflowEvents(hooks, userId);
 	hookFunctionsNodeEvents(hooks);
 	hookFunctionsFinalizeExecutionStatus(hooks);
-	hookFunctionsSave(hooks, { saveSetting, parentExecutions, pushRef, parentExecutionId });
+	hookFunctionsSave(hooks, { saveSettings, parentExecution, pushRef, parentExecutionId });
 	hookFunctionsSaveProgress(hooks, { saveSettings });
 	hookFunctionsStatistics(hooks);
 

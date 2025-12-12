@@ -1,4 +1,4 @@
-import type { AgentExecutor } from 'langchain/agents';
+import type { AgentExecutor } from '@langchain/classic/agents';
 import type { IExecuteFunctions, ISupplyDataFunctions } from 'n8n-workflow';
 import { executeCallback } from './callbacks';
 
