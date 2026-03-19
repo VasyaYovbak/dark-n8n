@@ -683,7 +683,10 @@ function hookFunctionsSave(
 					});
 
 					const currentRunData = fullRunData.data.resultData.runData;
-					const subExecutionsToDelete: string[] = [];
+					const subExecutionsToDelete: Array<{
+						executionId: string;
+						storedAt: 'db' | 'fs';
+					}> = [];
 					const parentStartTime = new Date(fullRunData.startedAt).getTime();
 
 					for (const subExec of subExecutions) {
@@ -724,7 +727,10 @@ function hookFunctionsSave(
 									currentRunData[nodeName] = nodeData as any;
 								}
 
-								subExecutionsToDelete.push(subExecAny.id);
+								subExecutionsToDelete.push({
+									executionId: subExecAny.id,
+									storedAt: subExecAny.storedAt ?? 'db',
+								});
 							}
 						}
 					}
@@ -749,12 +755,13 @@ function hookFunctionsSave(
 						});
 
 						// Delete sub-executions
-						for (const subId of subExecutionsToDelete) {
-							await executionRepository.hardDelete({
+						for (const { executionId, storedAt } of subExecutionsToDelete) {
+							await executionPersistence.hardDelete({
 								workflowId: this.workflowData.id,
-								executionId: subId,
+								executionId,
+								storedAt,
 							});
-							logger.debug('🗑️ Deleted sub-execution', { subId });
+							logger.debug('🗑️ Deleted sub-execution', { subId: executionId });
 						}
 					} else {
 						logger.debug('⚠️ No sub-executions found to merge');

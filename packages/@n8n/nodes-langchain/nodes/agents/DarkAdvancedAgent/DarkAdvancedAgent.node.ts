@@ -65,7 +65,8 @@ export class DarkAdvancedAgent implements INodeType {
 					calloutAction: {
 						label: 'pre-built agents',
 						icon: 'bot',
-						type: 'openPreBuiltAgentsCollection',
+						type: 'openSampleWorkflowTemplate',
+						templateId: 'self-building-ai-agent',
 					},
 				},
 				default: '',

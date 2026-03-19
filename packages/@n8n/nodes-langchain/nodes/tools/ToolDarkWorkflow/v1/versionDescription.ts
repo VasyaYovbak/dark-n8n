@@ -3,12 +3,12 @@
 import type { INodeTypeDescription } from 'n8n-workflow';
 import { NodeConnectionTypes } from 'n8n-workflow';
 
+import { getConnectionHintNoticeField } from '@n8n/ai-utilities';
 import {
 	inputSchemaField,
 	jsonSchemaExampleField,
 	schemaTypeField,
 } from '../../../../utils/descriptions';
-import { getConnectionHintNoticeField } from '../../../../utils/sharedFields';
 
 export const versionDescription: INodeTypeDescription = {
 	displayName: 'Dark Call n8n Workflow Tool',

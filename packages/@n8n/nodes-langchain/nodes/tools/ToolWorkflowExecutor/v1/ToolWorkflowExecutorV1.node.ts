@@ -386,6 +386,7 @@ async function executeToolWorkflow(
 			id: workflowProxy.$workflow.id,
 			name: `${workflow.name} (Tool Execution)`,
 			active: false,
+			activeVersionId: null,
 			nodes: workflowNodes,
 			connections: workflowConnections,
 			settings: workflow.settings,
