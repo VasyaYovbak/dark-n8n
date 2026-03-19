@@ -6,13 +6,14 @@ import { mock, mockDeep } from 'jest-mock-extended';
 import { HTTP_REQUEST_NODE_TYPE, WEBHOOK_NODE_TYPE, type INode } from 'n8n-workflow';
 import { v4 as uuid } from 'uuid';
 
+import type { ListQuery } from '@/requests';
+
 import { UpdateMcpSettingsDto } from '../dto/update-mcp-settings.dto';
 import { McpServerApiKeyService } from '../mcp-api-key.service';
 import { McpSettingsController } from '../mcp.settings.controller';
 import { McpSettingsService } from '../mcp.settings.service';
 import { createWorkflow } from './mock.utils';
 
-import { BadRequestError } from '@/errors/response-errors/bad-request.error';
 import { NotFoundError } from '@/errors/response-errors/not-found.error';
 import { WorkflowFinderService } from '@/workflows/workflow-finder.service';
 import { WorkflowService } from '@/workflows/workflow.service';
@@ -66,6 +67,15 @@ const createRes = () => {
 	res.json.mockReturnThis();
 	return res;
 };
+
+const createListQueryReq = (
+	user: User,
+	listQueryOptions: ListQuery.Options = {},
+): ListQuery.Request =>
+	({
+		user,
+		listQueryOptions,
+	}) as unknown as ListQuery.Request;
 
 describe('McpSettingsController', () => {
 	const logger = mock<Logger>();
@@ -187,6 +197,116 @@ describe('McpSettingsController', () => {
 		});
 	});
 
+	describe('getMcpEligibleWorkflows', () => {
+		const user = createUser();
+
+		test('calls workflowService.getMany with correct filter options', async () => {
+			const req = createListQueryReq(user);
+			const res = createRes();
+			const mockWorkflows = [createWorkflow({ id: 'wf-1' }), createWorkflow({ id: 'wf-2' })];
+
+			workflowService.getMany.mockResolvedValue({ workflows: mockWorkflows, count: 2 });
+
+			await controller.getMcpEligibleWorkflows(req, res);
+
+			expect(workflowService.getMany).toHaveBeenCalledWith(
+				user,
+				expect.objectContaining({
+					filter: expect.objectContaining({
+						isArchived: false,
+						availableInMCP: false,
+					}),
+				}),
+				false, // includeScopes
+				false, // includeFolders
+				false, // onlySharedWithMe
+				['workflow:update'], // requiredScopes
+			);
+		});
+
+		test('returns workflows and count in response', async () => {
+			const req = createListQueryReq(user);
+			const res = createRes();
+			const mockWorkflows = [createWorkflow({ id: 'wf-1' }), createWorkflow({ id: 'wf-2' })];
+
+			workflowService.getMany.mockResolvedValue({ workflows: mockWorkflows, count: 2 });
+
+			await controller.getMcpEligibleWorkflows(req, res);
+
+			expect(res.json).toHaveBeenCalledWith({ count: 2, data: mockWorkflows });
+		});
+
+		test('returns empty array when no eligible workflows exist', async () => {
+			const req = createListQueryReq(user);
+			const res = createRes();
+
+			workflowService.getMany.mockResolvedValue({ workflows: [], count: 0 });
+
+			await controller.getMcpEligibleWorkflows(req, res);
+
+			expect(res.json).toHaveBeenCalledWith({ count: 0, data: [] });
+		});
+
+		test('merges user-provided filter options with required filters', async () => {
+			const req = createListQueryReq(user, {
+				filter: { name: 'test-workflow' },
+				take: 10,
+				skip: 5,
+			});
+			const res = createRes();
+
+			workflowService.getMany.mockResolvedValue({ workflows: [], count: 0 });
+
+			await controller.getMcpEligibleWorkflows(req, res);
+
+			expect(workflowService.getMany).toHaveBeenCalledWith(
+				user,
+				expect.objectContaining({
+					filter: expect.objectContaining({
+						name: 'test-workflow',
+						isArchived: false,
+						availableInMCP: false,
+					}),
+					take: 10,
+					skip: 5,
+				}),
+				false,
+				false,
+				false,
+				['workflow:update'],
+			);
+		});
+
+		test('required filters override user-provided conflicting filters', async () => {
+			const req = createListQueryReq(user, {
+				filter: {
+					active: false,
+					isArchived: true,
+					availableInMCP: true,
+				},
+			});
+			const res = createRes();
+
+			workflowService.getMany.mockResolvedValue({ workflows: [], count: 0 });
+
+			await controller.getMcpEligibleWorkflows(req, res);
+
+			expect(workflowService.getMany).toHaveBeenCalledWith(
+				user,
+				expect.objectContaining({
+					filter: expect.objectContaining({
+						isArchived: false,
+						availableInMCP: false,
+					}),
+				}),
+				false,
+				false,
+				false,
+				['workflow:update'],
+			);
+		});
+	});
+
 	describe('toggleWorkflowMCPAccess', () => {
 		const user = createUser();
 		const workflowId = 'workflow-1';
@@ -217,18 +337,29 @@ describe('McpSettingsController', () => {
 			expect(workflowService.update).not.toHaveBeenCalled();
 		});
 
-		test('rejects enabling MCP for inactive workflows', async () => {
+		test('allows enabling MCP for inactive workflows', async () => {
 			workflowFinderService.findWorkflowForUser.mockResolvedValue(
-				createWorkflow({ activeVersionId: null }),
+				createWorkflow({
+					activeVersionId: null,
+					nodes: [createWebhookNode({ disabled: false })],
+				}),
+			);
+			workflowService.update.mockResolvedValue({
+				id: workflowId,
+				settings: { saveManualExecutions: true, availableInMCP: true },
+				versionId: 'client-version',
+			} as unknown as WorkflowEntity);
+
+			await controller.toggleWorkflowMCPAccess(
+				createReq({}, { user }),
+				mock<Response>(),
+				workflowId,
+				{
+					availableInMCP: true,
+				},
 			);
 
-			await expect(
-				controller.toggleWorkflowMCPAccess(createReq({}, { user }), mock<Response>(), workflowId, {
-					availableInMCP: true,
-				}),
-			).rejects.toThrow(new BadRequestError('MCP access can only be set for published workflows'));
-
-			expect(workflowService.update).not.toHaveBeenCalled();
+			expect(workflowService.update).toHaveBeenCalledTimes(1);
 		});
 
 		test('allows disabling MCP for inactive workflows', async () => {
@@ -250,12 +381,11 @@ describe('McpSettingsController', () => {
 			expect(workflowService.update).toHaveBeenCalledTimes(1);
 		});
 
-		test('rejects enabling MCP without active webhook nodes', async () => {
+		test('allows enabling MCP regardless of trigger node types', async () => {
 			workflowFinderService.findWorkflowForUser.mockResolvedValue(
 				createWorkflow({
 					activeVersionId: uuid(),
 					nodes: [
-						createWebhookNode({ disabled: true }),
 						{
 							id: 'node-2',
 							name: 'HTTP Request',
@@ -267,18 +397,22 @@ describe('McpSettingsController', () => {
 					],
 				}),
 			);
+			workflowService.update.mockResolvedValue({
+				id: workflowId,
+				settings: { saveManualExecutions: true, availableInMCP: true },
+				versionId: 'client-version',
+			} as unknown as WorkflowEntity);
 
-			await expect(
-				controller.toggleWorkflowMCPAccess(createReq({}, { user }), mock<Response>(), workflowId, {
+			await controller.toggleWorkflowMCPAccess(
+				createReq({}, { user }),
+				mock<Response>(),
+				workflowId,
+				{
 					availableInMCP: true,
-				}),
-			).rejects.toThrow(
-				new BadRequestError(
-					'MCP access can only be set for published workflows with one of the following trigger nodes: Schedule Trigger, Webhook Trigger, Form Trigger, Chat Trigger.',
-				),
+				},
 			);
 
-			expect(workflowService.update).not.toHaveBeenCalled();
+			expect(workflowService.update).toHaveBeenCalledTimes(1);
 		});
 
 		test('persists MCP availability when validation passes', async () => {

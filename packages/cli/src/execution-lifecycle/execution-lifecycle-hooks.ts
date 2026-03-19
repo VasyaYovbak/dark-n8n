@@ -1,5 +1,6 @@
 import { Logger } from '@n8n/backend-common';
-import { ExecutionRepository } from '@n8n/db';
+import { ExecutionRepository, UserRepository } from '@n8n/db';
+import type { User } from '@n8n/db';
 import { LifecycleMetadata } from '@n8n/decorators';
 import { Container, Service } from '@n8n/di';
 import { stringify } from 'flatted';
@@ -10,8 +11,12 @@ import {
 	InstanceSettings,
 	ExecutionLifecycleHooks,
 } from 'n8n-core';
+
+import { ExecutionPersistence } from '@/executions/execution-persistence';
 import type {
 	IRun,
+	IRunData,
+	IRunExecutionData,
 	IWorkflowBase,
 	RelatedExecution,
 	WorkflowExecuteMode,
@@ -19,6 +24,8 @@ import type {
 } from 'n8n-workflow';
 
 import { EventService } from '@/events/event.service';
+import type { RedactableExecution } from '@/executions/execution-redaction';
+import { ExecutionRedactionServiceProxy } from '@/executions/execution-redaction-proxy.service';
 import { ExternalHooks } from '@/external-hooks';
 import { Push } from '@/push';
 import { WorkflowStatisticsService } from '@/services/workflow-statistics.service';
@@ -33,6 +40,7 @@ import {
 	determineFinalExecutionStatus,
 	prepareExecutionDataForDbUpdate,
 	updateExistingExecution,
+	updateExistingExecutionMetadata,
 } from './shared/shared-hook-functions';
 import { type ExecutionSaveSettings, toSaveSettings } from './to-save-settings';
 import { getItemCountByConnectionType } from '@/utils/get-item-count-by-connection-type';
@@ -54,6 +62,7 @@ class ModulesHooksRegistry {
 							workflow: this.workflowData,
 							runData,
 							newStaticData,
+							executionId: this.executionId,
 						};
 						// eslint-disable-next-line @typescript-eslint/no-unsafe-return
 						return await instance[methodName].call(instance, context);
@@ -94,6 +103,21 @@ class ModulesHooksRegistry {
 							workflow: this.workflowData,
 							workflowInstance,
 							executionData,
+							executionId: this.executionId,
+						};
+						// eslint-disable-next-line @typescript-eslint/no-unsafe-return
+						return await instance[methodName].call(instance, context);
+					});
+					break;
+
+				case 'workflowExecuteResume':
+					hooks.addHandler(eventName, async function (workflowInstance, executionData) {
+						const context = {
+							type: 'workflowExecuteResume',
+							workflow: this.workflowData,
+							workflowInstance,
+							executionData,
+							executionId: this.executionId,
 						};
 						// eslint-disable-next-line @typescript-eslint/no-unsafe-return
 						return await instance[methodName].call(instance, context);
@@ -114,8 +138,8 @@ type HooksSetupParameters = {
 function hookFunctionsWorkflowEvents(hooks: ExecutionLifecycleHooks, userId?: string) {
 	const eventService = Container.get(EventService);
 	hooks.addHandler('workflowExecuteBefore', function () {
-		const { executionId, workflowData } = this;
-		eventService.emit('workflow-pre-execute', { executionId, data: workflowData });
+		const { executionId, workflowData, mode } = this;
+		eventService.emit('workflow-pre-execute', { executionId, data: workflowData, mode });
 	});
 	hooks.addHandler('workflowExecuteAfter', function (runData) {
 		if (runData.status === 'waiting') return;
@@ -163,11 +187,36 @@ function hookFunctionsNodeEvents(hooks: ExecutionLifecycleHooks) {
 }
 
 /**
+ * Constructs a minimal RedactableExecution from push event data so the existing
+ * redaction pipeline can be reused for real-time push events.
+ */
+function buildRedactableExecution(
+	hooks: ExecutionLifecycleHooks,
+	runData: IRunData,
+	executionData?: IRunExecutionData,
+): RedactableExecution {
+	return {
+		id: hooks.executionId,
+		mode: hooks.mode,
+		workflowId: hooks.workflowData.id,
+		data: {
+			resultData: { runData },
+			executionData: executionData?.executionData,
+		},
+		workflowData: {
+			settings: hooks.workflowData.settings,
+			nodes: hooks.workflowData.nodes,
+		},
+	};
+}
+
+/**
  * Returns hook functions to push data to Editor-UI
  */
 function hookFunctionsPush(
 	hooks: ExecutionLifecycleHooks,
 	{ pushRef, retryOf }: HooksSetupParameters,
+	userId?: string,
 ) {
 	if (!pushRef) return;
 
@@ -176,6 +225,19 @@ function hookFunctionsPush(
 
 	const logger = Container.get(Logger);
 	const pushInstance = Container.get(Push);
+	const redactionProxy = Container.get(ExecutionRedactionServiceProxy);
+	const userRepository = Container.get(UserRepository);
+
+	// Lazy user resolution — resolved once, reused across all node events in this execution
+	let resolvedUser: User | null | undefined; // undefined = not yet resolved
+	async function getUser(): Promise<User | null> {
+		if (resolvedUser !== undefined) return resolvedUser;
+		resolvedUser = userId
+			? await userRepository.findOne({ where: { id: userId }, relations: ['role'] })
+			: null;
+		return resolvedUser;
+	}
+
 	hooks.addHandler('nodeExecuteBefore', function (nodeName, data) {
 		const { executionId } = this;
 		// Push data to session which started workflow before each
@@ -191,7 +253,7 @@ function hookFunctionsPush(
 			pushRef,
 		);
 	});
-	hooks.addHandler('nodeExecuteAfter', function (nodeName, data) {
+	hooks.addHandler('nodeExecuteAfter', async function (nodeName, data, executionData) {
 		const { executionId } = this;
 		// Push data to session which started workflow after each rendered node
 		logger.debug(`Executing hook on node "${nodeName}" (hookFunctionsPush)`, {
@@ -211,6 +273,42 @@ function hookFunctionsPush(
 			pushRef,
 		);
 
+		// Fail-closed redaction: if user cannot be resolved, skip the data push
+		// entirely rather than sending unredacted data to the client.
+		const user = await getUser();
+		if (!user) {
+			logger.warn('Skipping execution data push: unable to resolve user for redaction', {
+				executionId,
+				nodeName,
+				userId,
+			});
+			return;
+		}
+
+		// Apply copy-on-write redaction before sending binary data.
+		// Returns the original data if no redaction is needed (zero-copy),
+		// or a structuredClone with redaction applied.
+		// Fail-closed: if redaction throws, skip the data push rather than
+		// sending unredacted data. The metadata-only push above already fired.
+		let dataToSend = data;
+		try {
+			const dummy = buildRedactableExecution(this, { [nodeName]: [data] }, executionData);
+			const result = await redactionProxy.processExecution(dummy, {
+				user,
+				keepOriginal: true,
+			});
+			if (result !== dummy) {
+				dataToSend = result.data.resultData.runData[nodeName][0];
+			}
+		} catch (error) {
+			logger.error('Failed to redact push data, skipping nodeExecuteAfterData', {
+				executionId,
+				nodeName,
+				error,
+			});
+			return;
+		}
+
 		// We send the node execution data as a WS binary message to the FE. Not
 		// because it's more efficient on the wire: the content is a JSON string
 		// so both text and binary would end the same on the wire. The reason
@@ -221,13 +319,13 @@ function hookFunctionsPush(
 		pushInstance.send(
 			{
 				type: 'nodeExecuteAfterData',
-				data: { executionId, nodeName, itemCountByConnectionType, data },
+				data: { executionId, nodeName, itemCountByConnectionType, data: dataToSend },
 			},
 			pushRef,
 			asBinary,
 		);
 	});
-	hooks.addHandler('workflowExecuteBefore', function (_workflow, data) {
+	hooks.addHandler('workflowExecuteBefore', async function (_workflow, data) {
 		const { executionId } = this;
 		const { id: workflowId, name: workflowName } = this.workflowData;
 		logger.debug('Executing hook (hookFunctionsPush)', {
@@ -235,7 +333,41 @@ function hookFunctionsPush(
 			pushRef,
 			workflowId,
 		});
-		// Push data to session which started the workflow
+
+		// Apply copy-on-write redaction to flattedRunData when retrying/resuming.
+		// Fail-closed: if user cannot be resolved or redaction throws, send
+		// empty runData rather than skipping the push or leaking unredacted data.
+		const user = await getUser();
+		let runDataToStringify: IRunData = {};
+		const hasRunData = data?.resultData.runData && Object.keys(data.resultData.runData).length > 0;
+
+		if (hasRunData && user) {
+			try {
+				const dummy = buildRedactableExecution(this, data.resultData.runData, data);
+				const result = await redactionProxy.processExecution(dummy, {
+					user,
+					keepOriginal: true,
+				});
+				runDataToStringify =
+					result !== dummy ? result.data.resultData.runData : data.resultData.runData;
+			} catch (error) {
+				logger.error('Failed to redact execution start data, sending empty runData', {
+					executionId,
+					workflowId,
+					error,
+				});
+				// runDataToStringify stays {} — fail closed
+			}
+		} else if (hasRunData && !user) {
+			logger.warn('Cannot redact execution start data: unable to resolve user', {
+				executionId,
+				workflowId,
+				userId,
+			});
+			// runDataToStringify stays {} — fail closed
+		}
+
+		// Always send executionStarted so the editor can initialise the execution UI
 		pushInstance.send(
 			{
 				type: 'executionStarted',
@@ -246,9 +378,7 @@ function hookFunctionsPush(
 					retryOf,
 					workflowId,
 					workflowName,
-					flattedRunData: data?.resultData.runData
-						? stringify(data.resultData.runData)
-						: stringify({}),
+					flattedRunData: stringify(runDataToStringify),
 				},
 			},
 			pushRef,
@@ -432,6 +562,7 @@ function hookFunctionsSave(
 	const logger = Container.get(Logger);
 	const errorReporter = Container.get(ErrorReporter);
 	const executionRepository = Container.get(ExecutionRepository);
+	const executionPersistence = Container.get(ExecutionPersistence);
 	const binaryDataService = Container.get(BinaryDataService);
 	const workflowStaticDataService = Container.get(WorkflowStaticDataService);
 	const workflowStatisticsService = Container.get(WorkflowStatisticsService);
@@ -489,9 +620,10 @@ function hookFunctionsSave(
 			if (shouldNotSave && !fullRunData.waitTill && !isManualMode) {
 				executeErrorWorkflow(this.workflowData, fullRunData, this.mode, this.executionId, retryOf);
 
-				await executionRepository.hardDelete({
+				await executionPersistence.hardDelete({
 					workflowId: this.workflowData.id,
 					executionId: this.executionId,
+					storedAt: fullRunData.storedAt,
 				});
 
 				return;
@@ -635,6 +767,11 @@ function hookFunctionsSave(
 				}
 			}
 
+			await updateExistingExecutionMetadata(
+				this.executionId,
+				fullRunData.data?.resultData?.metadata,
+			);
+
 			if (!isManualMode) {
 				executeErrorWorkflow(this.workflowData, fullRunData, this.mode, this.executionId, retryOf);
 			}
@@ -701,6 +838,8 @@ function hookFunctionsSaveWorker(
 				fullExecutionData.data.pushRef = pushRef;
 			}
 
+			// In scaling mode, worker saves execution without metadata
+			// Main process will save metadata after deletion decisions to avoid FK violations
 			await updateExistingExecution({
 				executionId: this.executionId,
 				workflowId: this.workflowData.id,
@@ -766,7 +905,7 @@ export function getLifecycleHooksForScalingWorker(
 	hookFunctionsExternalHooks(hooks);
 
 	if (executionMode === 'manual' && Container.get(InstanceSettings).isWorker) {
-		hookFunctionsPush(hooks, optionalParameters);
+		hookFunctionsPush(hooks, optionalParameters, data.userId);
 	}
 
 	Container.get(ModulesHooksRegistry).addHooks(hooks);
@@ -786,6 +925,7 @@ export function getLifecycleHooksForScalingMain(
 	const saveSettings = toSaveSettings(workflowData.settings);
 	const optionalParameters = { pushRef, retryOf: retryOf ?? undefined, saveSettings };
 	const executionRepository = Container.get(ExecutionRepository);
+	const executionPersistence = Container.get(ExecutionPersistence);
 
 	hookFunctionsWorkflowEvents(hooks, userId);
 	hookFunctionsSaveProgress(hooks, optionalParameters);
@@ -818,10 +958,17 @@ export function getLifecycleHooksForScalingMain(
 			(fullRunData.status !== 'success' && !saveSettings.error);
 
 		if (!isManualMode && shouldNotSave && !fullRunData.waitTill) {
-			await executionRepository.hardDelete({
+			await executionPersistence.hardDelete({
 				workflowId: this.workflowData.id,
 				executionId: this.executionId,
+				storedAt: fullRunData.storedAt,
 			});
+		} else {
+			// Only save metadata if execution is being kept
+			await updateExistingExecutionMetadata(
+				this.executionId,
+				fullRunData.data?.resultData?.metadata,
+			);
 		}
 	});
 
@@ -851,7 +998,7 @@ export function getLifecycleHooksForRegularMain(
 	hookFunctionsNodeEvents(hooks);
 	hookFunctionsFinalizeExecutionStatus(hooks);
 	hookFunctionsSave(hooks, optionalParameters);
-	hookFunctionsPush(hooks, optionalParameters);
+	hookFunctionsPush(hooks, optionalParameters, userId);
 	hookFunctionsSaveProgress(hooks, optionalParameters);
 	hookFunctionsStatistics(hooks);
 	hookFunctionsExternalHooks(hooks);

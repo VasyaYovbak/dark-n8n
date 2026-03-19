@@ -12,6 +12,10 @@ describe('useToast', () => {
 	let telemetryTrackSpy: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
+		const appEl = document.createElement('div');
+		appEl.id = 'n8n-app';
+		document.body.appendChild(appEl);
+
 		createTestingPinia();
 
 		telemetryTrackSpy = vi.fn();
@@ -20,6 +24,10 @@ describe('useToast', () => {
 		} as unknown as ReturnType<typeof useTelemetry>);
 
 		toast = useToast();
+	});
+
+	afterEach(() => {
+		document.getElementById('n8n-app')?.remove();
 	});
 
 	it('should show a message', async () => {
@@ -202,6 +210,54 @@ describe('useToast', () => {
 			});
 
 			expect(telemetryTrackSpy).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('clearAllStickyNotifications', () => {
+		it('should close all sticky notifications (duration: 0)', async () => {
+			toast.showMessage({
+				message: 'Sticky notification 1',
+				title: 'Sticky 1',
+				duration: 0,
+			});
+
+			toast.showMessage({
+				message: 'Sticky notification 2',
+				title: 'Sticky 2',
+				duration: 0,
+			});
+
+			await waitFor(() => {
+				expect(screen.getAllByRole('alert')).toHaveLength(2);
+			});
+
+			toast.clearAllStickyNotifications();
+
+			await waitFor(() => {
+				expect(screen.queryAllByRole('alert')).toHaveLength(0);
+			});
+		});
+
+		it('should not affect non-sticky notifications', async () => {
+			toast.showMessage({
+				message: 'Non-sticky notification',
+				title: 'Non-sticky',
+				duration: 5000,
+			});
+
+			await waitFor(() => {
+				expect(screen.getByRole('alert')).toBeVisible();
+			});
+
+			toast.clearAllStickyNotifications();
+
+			await waitFor(() => {
+				expect(screen.getByRole('alert')).toBeVisible();
+			});
+		});
+
+		it('should handle being called when there are no sticky notifications', () => {
+			expect(() => toast.clearAllStickyNotifications()).not.toThrow();
 		});
 	});
 });

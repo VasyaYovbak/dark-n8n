@@ -45,6 +45,19 @@ const WorkflowExecuteModeSchema = z.union([
 
 export type WorkflowExecuteModeValues = z.infer<typeof WorkflowExecuteModeSchema>;
 
+const RedactionPolicySchema = z.union([
+	z.literal('none'),
+	z.literal('all'),
+	z.literal('non-manual'),
+]);
+
+const RedactionSettingSchemaV1 = z.object({
+	version: z.literal(1),
+	policy: RedactionPolicySchema,
+});
+
+export type IRedactionSettingV1 = z.output<typeof RedactionSettingSchemaV1>;
+
 const ExecutionContextSchemaV1 = z.object({
 	version: z.literal(1),
 	/**
@@ -56,6 +69,16 @@ const ExecutionContextSchemaV1 = z.object({
 	 * The mode in which the workflow is being executed
 	 */
 	source: WorkflowExecuteModeSchema,
+
+	/**
+	 * Optional node where execution started
+	 */
+	triggerNode: z
+		.object({
+			name: z.string(),
+			type: z.string(),
+		})
+		.optional(),
 
 	/**
 	 * Optional ID of the parent execution, if this is set this
@@ -72,6 +95,13 @@ const ExecutionContextSchemaV1 = z.object({
 		description:
 			'Encrypted credential context for dynamic credential resolution Always encrypted when stored, decrypted on-demand by credential resolver @see ICredentialContext for decrypted structure',
 	}),
+
+	/**
+	 * Redaction setting captured at execution time.
+	 * Persisted so the correct redaction policy is applied when reading execution data,
+	 * regardless of any subsequent changes to the workflow setting.
+	 */
+	redaction: RedactionSettingSchemaV1.optional(),
 });
 
 export type IExecutionContextV1 = z.output<typeof ExecutionContextSchemaV1>;

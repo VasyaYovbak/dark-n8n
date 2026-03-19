@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { useI18n } from '@n8n/i18n';
+import { useInjectWorkflowId } from '@/app/composables/useInjectWorkflowId';
 import { useTelemetry } from '@/app/composables/useTelemetry';
-import {
-	CRON_NODE_TYPE,
-	INTERVAL_NODE_TYPE,
-	MANUAL_TRIGGER_NODE_TYPE,
-	START_NODE_TYPE,
-} from '@/app/constants';
+import { CRON_NODE_TYPE, INTERVAL_NODE_TYPE, MANUAL_TRIGGER_NODE_TYPE } from '@/app/constants';
 import { useNodeTypesStore } from '@/app/stores/nodeTypes.store';
 import { useWorkflowsStore } from '@/app/stores/workflows.store';
+import { injectWorkflowDocumentStore } from '@/app/stores/workflowDocument.store';
 import { waitingNodeTooltip } from '@/features/execution/executions/executions.utils';
 import uniqBy from 'lodash/uniqBy';
 import {
@@ -100,13 +97,17 @@ const inputModes = [
 	{ value: 'debugging', label: i18n.baseText('ndv.input.fromAI') },
 ];
 
+const workflowId = useInjectWorkflowId();
 const nodeTypesStore = useNodeTypesStore();
 const workflowsStore = useWorkflowsStore();
+const workflowDocumentStore = injectWorkflowDocumentStore();
 const workflowState = injectWorkflowState();
 const router = useRouter();
 const { runWorkflow } = useRunWorkflow({ router });
 
-const activeNode = computed(() => workflowsStore.getNodeByName(props.activeNodeName));
+const activeNode = computed(
+	() => workflowDocumentStore?.value?.getNodeByName(props.activeNodeName) ?? null,
+);
 
 const rootNode = computed(() => {
 	if (!activeNode.value) return null;
@@ -130,7 +131,7 @@ const inputMode = ref<MappingMode>(
 
 const isMappingMode = computed(() => isActiveNodeConfig.value && inputMode.value === 'mapping');
 const showDraggableHint = computed(() => {
-	const toIgnore = [START_NODE_TYPE, MANUAL_TRIGGER_NODE_TYPE, CRON_NODE_TYPE, INTERVAL_NODE_TYPE];
+	const toIgnore = [MANUAL_TRIGGER_NODE_TYPE, CRON_NODE_TYPE, INTERVAL_NODE_TYPE];
 	if (!currentNode.value || toIgnore.includes(currentNode.value.type)) {
 		return false;
 	}
@@ -208,7 +209,7 @@ const currentNode = computed(() => {
 	if (isActiveNodeConfig.value) {
 		// if we're mapping node we want to show the output of the mapped node
 		if (mappedNode.value) {
-			return workflowsStore.getNodeByName(mappedNode.value);
+			return workflowDocumentStore?.value?.getNodeByName(mappedNode.value) ?? null;
 		}
 
 		// in debugging mode data does get set manually and is only for debugging
@@ -216,7 +217,7 @@ const currentNode = computed(() => {
 		return activeNode.value;
 	}
 
-	return workflowsStore.getNodeByName(props.currentNodeName ?? '');
+	return workflowDocumentStore?.value?.getNodeByName(props.currentNodeName ?? '') ?? null;
 });
 
 const connectedCurrentNodeOutputs = computed(() => {
@@ -250,7 +251,10 @@ const waitingMessage = computed(() => {
 	const parentNode = parentNodes.value[0];
 	return (
 		parentNode &&
-		waitingNodeTooltip(workflowsStore.getNodeByName(parentNode.name), props.workflowObject)
+		waitingNodeTooltip(
+			workflowDocumentStore?.value?.getNodeByName(parentNode.name) ?? null,
+			props.workflowObject,
+		)
 	);
 });
 
@@ -319,7 +323,7 @@ function onNodeExecute() {
 	if (activeNode.value) {
 		telemetry.track('User clicked ndv button', {
 			node_type: activeNode.value.type,
-			workflow_id: workflowsStore.workflowId,
+			workflow_id: workflowId.value,
 			push_ref: props.pushRef,
 			pane: 'input',
 			type: 'executePrevious',
@@ -365,7 +369,7 @@ function onConnectionHelpClick() {
 	if (activeNode.value) {
 		telemetry.track('User clicked ndv link', {
 			node_type: activeNode.value.type,
-			workflow_id: workflowsStore.workflowId,
+			workflow_id: workflowId.value,
 			push_ref: props.pushRef,
 			pane: 'input',
 			type: 'not-connected-help',

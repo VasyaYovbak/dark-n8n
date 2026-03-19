@@ -15,12 +15,11 @@ import type { Response } from 'express';
 import { UpdateMcpSettingsDto } from './dto/update-mcp-settings.dto';
 import { UpdateWorkflowAvailabilityDto } from './dto/update-workflow-availability.dto';
 import { McpServerApiKeyService } from './mcp-api-key.service';
-import { SUPPORTED_MCP_TRIGGERS } from './mcp.constants';
 import { McpSettingsService } from './mcp.settings.service';
-import { findMcpSupportedTrigger } from './mcp.utils';
 
-import { BadRequestError } from '@/errors/response-errors/bad-request.error';
 import { NotFoundError } from '@/errors/response-errors/not-found.error';
+import { listQueryMiddleware } from '@/middlewares';
+import type { ListQuery } from '@/requests';
 import { WorkflowFinderService } from '@/workflows/workflow-finder.service';
 import { WorkflowService } from '@/workflows/workflow.service';
 
@@ -66,6 +65,29 @@ export class McpSettingsController {
 		return await this.mcpServerApiKeyService.rotateMcpServerApiKey(req.user);
 	}
 
+	@Get('/workflows', { middlewares: listQueryMiddleware })
+	async getMcpEligibleWorkflows(req: ListQuery.Request, res: Response) {
+		const options: ListQuery.Options = {
+			...req.listQueryOptions,
+			filter: {
+				...req.listQueryOptions?.filter,
+				isArchived: false,
+				availableInMCP: false,
+			},
+		};
+
+		const { workflows, count } = await this.workflowService.getMany(
+			req.user,
+			options,
+			false, // includeScopes
+			false, // includeFolders
+			false, // onlySharedWithMe
+			['workflow:update'], // requiredScopes - only return workflows the user can edit
+		);
+
+		res.json({ count, data: workflows });
+	}
+
 	@ProjectScope('workflow:update')
 	@Patch('/workflows/:workflowId/toggle-access')
 	async toggleWorkflowMCPAccess(
@@ -89,20 +111,6 @@ export class McpSettingsController {
 			throw new NotFoundError(
 				'Could not load the workflow - you can only access workflows available to you',
 			);
-		}
-
-		if (dto.availableInMCP) {
-			if (!workflow.activeVersionId) {
-				throw new BadRequestError('MCP access can only be set for published workflows');
-			}
-			const nodes = workflow.activeVersion?.nodes ?? [];
-			const supportedTrigger = findMcpSupportedTrigger(nodes);
-
-			if (!supportedTrigger) {
-				throw new BadRequestError(
-					`MCP access can only be set for published workflows with one of the following trigger nodes: ${Object.values(SUPPORTED_MCP_TRIGGERS).join(', ')}.`,
-				);
-			}
 		}
 
 		const workflowUpdate = new WorkflowEntity();

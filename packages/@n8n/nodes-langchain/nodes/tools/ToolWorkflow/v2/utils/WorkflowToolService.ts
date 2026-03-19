@@ -27,10 +27,7 @@ import {
 	sleepWithAbort,
 } from 'n8n-workflow';
 
-import {
-	createZodSchemaFromArgs,
-	extractFromAIParameters,
-} from '../../../../../utils/fromAIToolFactory';
+import { createZodSchemaFromArgs, extractFromAIParameters } from '@n8n/ai-utilities';
 
 function isNodeExecutionData(data: unknown): data is INodeExecutionData[] {
 	return isArray(data) && Boolean(data.length) && isObject(data[0]) && 'json' in data[0];
@@ -193,10 +190,13 @@ export class WorkflowToolService {
 
 					if (manualLogging) {
 						const metadata = parseErrorMetadata(error);
+						// Wrap error in INodeExecutionData format so it can be properly processed
+						// by buildSteps and displayed in the UI execution data
+						const errorData: INodeExecutionData[] = [{ json: { error: errorResponse } }];
 						void context.addOutputData(
 							NodeConnectionTypes.AiTool,
 							localRunIndex,
-							executionError,
+							[errorData],
 							metadata,
 						);
 					}
@@ -424,8 +424,9 @@ export class WorkflowToolService {
 			return new DynamicTool({ name, description, func });
 		}
 
-		// Otherwise, prepare Zod schema and create a structured tool
+		// Prepare Zod schema for the structured tool
 		const schema = createZodSchemaFromArgs(collectedArguments);
+
 		return new DynamicStructuredTool({ schema, name, description, func });
 	}
 }

@@ -5,6 +5,11 @@ export namespace ChatUI {
 		type: 'text';
 		content: string;
 		codeSnippet?: string;
+		focusedNodeNames?: string[];
+		revertVersion?: {
+			id: string;
+			createdAt: string;
+		};
 	}
 
 	export interface TaskAbortedMessage extends Omit<TextMessage, 'role' | 'codeSnippet'> {
@@ -28,6 +33,8 @@ export namespace ChatUI {
 		replaced?: boolean;
 		error?: boolean;
 		suggestionId: string;
+		sdkSessionId?: string;
+		nodeName?: string;
 	}
 
 	export interface EndSessionMessage {

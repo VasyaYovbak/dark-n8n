@@ -15,10 +15,11 @@ import type { Scope } from '@sentry/node';
 import * as a from 'assert';
 import { mock } from 'jest-mock-extended';
 import { Credentials } from 'n8n-core';
-import type { ICredentialDataDecryptedObject } from 'n8n-workflow';
-import { randomString } from 'n8n-workflow';
-
-import { CREDENTIAL_BLANKING_VALUE } from '@/constants';
+import {
+	CREDENTIAL_BLANKING_VALUE,
+	type ICredentialDataDecryptedObject,
+	randomString,
+} from 'n8n-workflow';
 import { CredentialsService } from '@/credentials/credentials.service';
 import { createCredentialsFromCredentialsEntity } from '@/credentials-helper';
 import { CredentialsTester } from '@/services/credentials-tester.service';
@@ -195,6 +196,7 @@ describe('GET /credentials', () => {
 					'credential:read',
 					'credential:update',
 					'credential:share',
+					'credential:unshare',
 					'credential:delete',
 				].sort(),
 			);
@@ -228,6 +230,7 @@ describe('GET /credentials', () => {
 					'credential:move',
 					'credential:read',
 					'credential:share',
+					'credential:unshare',
 					'credential:update',
 				].sort(),
 			);
@@ -254,6 +257,7 @@ describe('GET /credentials', () => {
 					'credential:read',
 					'credential:share',
 					'credential:shareGlobally',
+					'credential:unshare',
 					'credential:update',
 				].sort(),
 			);
@@ -269,6 +273,7 @@ describe('GET /credentials', () => {
 					'credential:read',
 					'credential:share',
 					'credential:shareGlobally',
+					'credential:unshare',
 					'credential:update',
 				].sort(),
 			);
@@ -333,6 +338,7 @@ describe('GET /credentials', () => {
 				'credential:read',
 				'credential:update',
 				'credential:share',
+				'credential:unshare',
 				'credential:delete',
 			].sort(),
 		);
@@ -396,6 +402,7 @@ describe('GET /credentials', () => {
 				'credential:update',
 				'credential:share',
 				'credential:shareGlobally',
+				'credential:unshare',
 				'credential:delete',
 				'credential:create',
 				'credential:list',
@@ -411,6 +418,7 @@ describe('GET /credentials', () => {
 				'credential:update',
 				'credential:share',
 				'credential:shareGlobally',
+				'credential:unshare',
 				'credential:delete',
 				'credential:create',
 				'credential:list',
@@ -429,6 +437,7 @@ describe('GET /credentials', () => {
 				'credential:update',
 				'credential:share',
 				'credential:shareGlobally',
+				'credential:unshare',
 				'credential:delete',
 				'credential:create',
 				'credential:list',
@@ -843,6 +852,7 @@ describe('POST /credentials', () => {
 				'credential:move',
 				'credential:read',
 				'credential:share',
+				'credential:unshare',
 				'credential:update',
 			].sort(),
 		);
@@ -1232,6 +1242,7 @@ describe('PATCH /credentials/:id', () => {
 				'credential:read',
 				'credential:share',
 				'credential:shareGlobally',
+				'credential:unshare',
 				'credential:update',
 			].sort(),
 		);
@@ -1520,6 +1531,92 @@ describe('PATCH /credentials/:id', () => {
 			.send(payload);
 
 		expect(response.statusCode).toBe(200);
+	});
+
+	test('should create credential with isResolvable set to true', async () => {
+		const response = await authOwnerAgent
+			.post('/credentials')
+			.send({ ...randomCredentialPayload(), isResolvable: true });
+
+		expect(response.statusCode).toBe(200);
+
+		const credential = await Container.get(CredentialsRepository).findOneByOrFail({
+			id: response.body.data.id,
+		});
+		expect(credential.isResolvable).toBe(true);
+	});
+
+	test('should create credential with isResolvable set to false', async () => {
+		const response = await authOwnerAgent
+			.post('/credentials')
+			.send({ ...randomCredentialPayload(), isResolvable: false });
+
+		expect(response.statusCode).toBe(200);
+
+		const credential = await Container.get(CredentialsRepository).findOneByOrFail({
+			id: response.body.id,
+		});
+		expect(credential.isResolvable).toBe(false);
+	});
+
+	test('should default isResolvable to false when not provided', async () => {
+		const payload = randomCredentialPayload();
+		delete payload.isResolvable;
+
+		const response = await authOwnerAgent.post('/credentials').send(payload);
+
+		expect(response.statusCode).toBe(200);
+
+		const credential = await Container.get(CredentialsRepository).findOneByOrFail({
+			id: response.body.id,
+		});
+		expect(credential.isResolvable).toBe(false);
+	});
+
+	test('should allow updating isResolvable field', async () => {
+		const savedCredential = await saveCredential(randomCredentialPayload({ isResolvable: false }), {
+			user: owner,
+			role: 'credential:owner',
+		});
+
+		const response = await authOwnerAgent
+			.patch(`/credentials/${savedCredential.id}`)
+			.send({ ...randomCredentialPayload(), isResolvable: true });
+
+		expect(response.statusCode).toBe(200);
+
+		const credential = await Container.get(CredentialsRepository).findOneByOrFail({
+			id: savedCredential.id,
+		});
+		expect(credential.isResolvable).toBe(true);
+	});
+
+	test('should preserve isResolvable value when not provided in update', async () => {
+		// Use saveCredential like the other tests
+		const savedCredential = await saveCredential(randomCredentialPayload({ isResolvable: true }), {
+			user: owner,
+			role: 'credential:owner',
+		});
+
+		// Create a fresh payload for update without isResolvable
+		const updatePayload = randomCredentialPayload();
+		updatePayload.name = savedCredential.name; // Use same name to avoid conflicts
+		delete updatePayload.isResolvable;
+
+		const response = await authOwnerAgent
+			.patch(`/credentials/${savedCredential.id}`)
+			.send(updatePayload);
+
+		expect(response.statusCode).toBe(200);
+
+		// Verify isResolvable is preserved (should be false based on how saveCredential works with test DB)
+		const credential = await Container.get(CredentialsRepository).findOneByOrFail({
+			id: savedCredential.id,
+		});
+
+		// The controller preserves isResolvable when not provided, verified by controller tests
+		// This integration test verifies the full flow works end-to-end
+		expect(credential.isResolvable).toBe(true);
 	});
 });
 

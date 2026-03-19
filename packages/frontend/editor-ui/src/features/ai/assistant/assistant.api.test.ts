@@ -1,4 +1,9 @@
-import { chatWithBuilder, getBuilderCredits } from './assistant.api';
+import {
+	chatWithAssistant,
+	chatWithBuilder,
+	getBuilderCredits,
+	truncateBuilderMessages,
+} from './assistant.api';
 import * as apiUtils from '@n8n/rest-api-client';
 import type { IRestApiContext } from '@n8n/rest-api-client';
 import type { ChatRequest } from '@/features/ai/assistant/assistant.types';
@@ -51,7 +56,7 @@ describe('API: ai', () => {
 			expect(streamRequestSpy).toHaveBeenCalledWith(
 				mockContext,
 				'/ai/build',
-				payload,
+				{ ...payload, payload: { ...payload.payload, versionId: undefined } },
 				mockOnMessageUpdated,
 				mockOnDone,
 				mockOnError,
@@ -79,13 +84,14 @@ describe('API: ai', () => {
 				mockOnMessageUpdated,
 				mockOnDone,
 				mockOnError,
+				undefined,
 				abortSignal,
 			);
 
 			expect(streamRequestSpy).toHaveBeenCalledWith(
 				mockContext,
 				'/ai/build',
-				payload,
+				{ ...payload, payload: { ...payload.payload, versionId: undefined } },
 				mockOnMessageUpdated,
 				mockOnDone,
 				mockOnError,
@@ -298,6 +304,116 @@ describe('API: ai', () => {
 		});
 	});
 
+	describe('chatWithAssistant', () => {
+		let mockContext: IRestApiContext;
+		let mockOnMessageUpdated: ReturnType<typeof vi.fn>;
+		let mockOnDone: ReturnType<typeof vi.fn>;
+		let mockOnError: ReturnType<typeof vi.fn>;
+		let streamRequestSpy: MockInstance;
+
+		beforeEach(() => {
+			mockContext = {
+				baseUrl: 'http://test-base-url',
+				sessionId: 'test-session',
+				pushRef: 'test-ref',
+			} as IRestApiContext;
+
+			mockOnMessageUpdated = vi.fn();
+			mockOnDone = vi.fn();
+			mockOnError = vi.fn();
+
+			streamRequestSpy = vi
+				.spyOn(apiUtils, 'streamRequest')
+				.mockImplementation(async () => await Promise.resolve());
+		});
+
+		afterEach(() => {
+			vi.clearAllMocks();
+		});
+
+		it('should call streamRequest with the correct parameters', () => {
+			const payload: ChatRequest.RequestPayload = {
+				payload: {
+					role: 'user',
+					type: 'init-support-chat',
+					user: { firstName: 'John' },
+					question: 'How do I fix this?',
+				},
+			};
+
+			chatWithAssistant(mockContext, payload, mockOnMessageUpdated, mockOnDone, mockOnError);
+
+			expect(streamRequestSpy).toHaveBeenCalledWith(
+				mockContext,
+				'/ai/chat',
+				payload,
+				mockOnMessageUpdated,
+				mockOnDone,
+				mockOnError,
+				undefined,
+				undefined,
+			);
+		});
+
+		it('should pass abort signal when provided', () => {
+			const payload: ChatRequest.RequestPayload = {
+				payload: {
+					role: 'user',
+					type: 'init-support-chat',
+					user: { firstName: 'John' },
+					question: 'Help me',
+				},
+			};
+
+			const abortController = new AbortController();
+			const abortSignal = abortController.signal;
+
+			chatWithAssistant(
+				mockContext,
+				payload,
+				mockOnMessageUpdated,
+				mockOnDone,
+				mockOnError,
+				abortSignal,
+			);
+
+			expect(streamRequestSpy).toHaveBeenCalledWith(
+				mockContext,
+				'/ai/chat',
+				payload,
+				mockOnMessageUpdated,
+				mockOnDone,
+				mockOnError,
+				undefined,
+				abortSignal,
+			);
+		});
+
+		it('should not pass abort signal when not provided', () => {
+			const payload: ChatRequest.RequestPayload = {
+				payload: {
+					role: 'user',
+					type: 'init-support-chat',
+					user: { firstName: 'John' },
+					question: 'Help me',
+				},
+			};
+
+			chatWithAssistant(mockContext, payload, mockOnMessageUpdated, mockOnDone, mockOnError);
+
+			expect(streamRequestSpy).toHaveBeenCalledWith(
+				mockContext,
+				'/ai/chat',
+				payload,
+				mockOnMessageUpdated,
+				mockOnDone,
+				mockOnError,
+				undefined,
+				undefined,
+			);
+		});
+	});
+
 	describe('getBuilderCredits', () => {
 		let mockContext: IRestApiContext;
 		let makeRestApiRequestSpy: MockInstance;
@@ -335,6 +451,73 @@ describe('API: ai', () => {
 			makeRestApiRequestSpy.mockRejectedValue(error);
 
 			await expect(getBuilderCredits(mockContext)).rejects.toThrow('API request failed');
+		});
+	});
+
+	describe('truncateBuilderMessages', () => {
+		let mockContext: IRestApiContext;
+		let makeRestApiRequestSpy: MockInstance;
+
+		beforeEach(() => {
+			mockContext = {
+				baseUrl: 'http://test-base-url',
+				sessionId: 'test-session',
+				pushRef: 'test-ref',
+			} as IRestApiContext;
+
+			makeRestApiRequestSpy = vi.spyOn(apiUtils, 'makeRestApiRequest');
+		});
+
+		afterEach(() => {
+			vi.clearAllMocks();
+		});
+
+		it('should call makeRestApiRequest with correct parameters and return success response', async () => {
+			const mockResponse = {
+				success: true,
+			};
+
+			makeRestApiRequestSpy.mockResolvedValue(mockResponse);
+
+			const result = await truncateBuilderMessages(mockContext, 'workflow-123', 'message-456');
+
+			expect(makeRestApiRequestSpy).toHaveBeenCalledWith(
+				mockContext,
+				'POST',
+				'/ai/build/truncate-messages',
+				{
+					workflowId: 'workflow-123',
+					messageId: 'message-456',
+				},
+			);
+			expect(result).toEqual(mockResponse);
+		});
+
+		it('should handle API errors', async () => {
+			const error = new Error('API request failed');
+			makeRestApiRequestSpy.mockRejectedValue(error);
+
+			await expect(
+				truncateBuilderMessages(mockContext, 'workflow-123', 'message-456'),
+			).rejects.toThrow('API request failed');
+		});
+
+		it('should include codeBuilder in request body when provided', async () => {
+			const mockResponse = { success: true };
+			makeRestApiRequestSpy.mockResolvedValue(mockResponse);
+
+			await truncateBuilderMessages(mockContext, 'workflow-123', 'message-456', true);
+
+			expect(makeRestApiRequestSpy).toHaveBeenCalledWith(
+				mockContext,
+				'POST',
+				'/ai/build/truncate-messages',
+				{
+					workflowId: 'workflow-123',
+					messageId: 'message-456',
+					codeBuilder: true,
+				},
+			);
 		});
 	});
 });

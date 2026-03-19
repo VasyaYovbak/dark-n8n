@@ -1,8 +1,8 @@
-import { withTransaction } from '@n8n/db';
 import { Service } from '@n8n/di';
+import { withTransaction } from '@n8n/db';
 import { DataSource, EntityManager, Repository } from '@n8n/typeorm';
 
-import { ChatHubSession } from './chat-hub-session.entity';
+import { ChatHubSession, IChatHubSession } from './chat-hub-session.entity';
 
 import { NotFoundError } from '@/errors/response-errors/not-found.error';
 
@@ -12,13 +12,15 @@ export class ChatHubSessionRepository extends Repository<ChatHubSession> {
 		super(ChatHubSession, dataSource.manager);
 	}
 
-	async createChatSession(session: Partial<ChatHubSession>, trx?: EntityManager) {
-		return await withTransaction(this.manager, trx, async (em) => {
-			await em.insert(ChatHubSession, session);
-			return await em.findOneOrFail(ChatHubSession, {
-				where: { id: session.id },
-				relations: ['messages'],
-			});
+	async createChatSession(
+		session: Partial<IChatHubSession> & Pick<IChatHubSession, 'id'>,
+		trx?: EntityManager,
+	) {
+		const em = trx ?? this.manager;
+		await em.insert(ChatHubSession, session);
+		return await em.findOneOrFail(ChatHubSession, {
+			where: { id: session.id },
+			relations: ['messages'],
 		});
 	}
 
@@ -42,7 +44,7 @@ export class ChatHubSessionRepository extends Repository<ChatHubSession> {
 		});
 	}
 
-	async updateChatSession(id: string, updates: Partial<ChatHubSession>, trx?: EntityManager) {
+	async updateChatSession(id: string, updates: Partial<IChatHubSession>, trx?: EntityManager) {
 		return await withTransaction(this.manager, trx, async (em: EntityManager) => {
 			await em.update(ChatHubSession, { id }, updates);
 			return await em.findOneOrFail(ChatHubSession, {
@@ -53,16 +55,22 @@ export class ChatHubSessionRepository extends Repository<ChatHubSession> {
 	}
 
 	async deleteChatHubSession(id: string, trx?: EntityManager) {
-		return await withTransaction(this.manager, trx, async (em) => {
-			return await em.delete(ChatHubSession, { id });
-		});
+		const em = trx ?? this.manager;
+		return await em.delete(ChatHubSession, { id });
 	}
 
-	async getManyByUserId(userId: string, limit: number, cursor?: string) {
+	async getManyByUserId(userId: string, limit: number, cursor?: string, type?: string) {
 		const queryBuilder = this.createQueryBuilder('session')
+			.leftJoinAndSelect('session.agent', 'agent')
+			.leftJoinAndSelect('session.workflow', 'workflow')
+			.leftJoinAndSelect('workflow.activeVersion', 'activeVersion')
 			.where('session.ownerId = :userId', { userId })
-			.orderBy("COALESCE(session.lastMessageAt, '1970-01-01')", 'DESC')
+			.orderBy('session.lastMessageAt', 'DESC')
 			.addOrderBy('session.id', 'ASC');
+
+		if (type) {
+			queryBuilder.andWhere('session.type = :type', { type });
+		}
 
 		if (cursor) {
 			const cursorSession = await this.findOne({
@@ -87,23 +95,27 @@ export class ChatHubSessionRepository extends Repository<ChatHubSession> {
 		return await queryBuilder.getMany();
 	}
 
+	async existsById(id: string, userId: string, trx?: EntityManager): Promise<boolean> {
+		const em = trx ?? this.manager;
+		return await em.exists(ChatHubSession, { where: { id, ownerId: userId } });
+	}
+
 	async getOneById(id: string, userId: string, trx?: EntityManager) {
-		return await withTransaction(
-			this.manager,
-			trx,
-			async (em) => {
-				return await em.findOne(ChatHubSession, {
-					where: { id, ownerId: userId },
-					relations: ['messages'],
-				});
+		const em = trx ?? this.manager;
+		return await em.findOne(ChatHubSession, {
+			where: { id, ownerId: userId },
+			relations: {
+				messages: true,
+				agent: true,
+				workflow: {
+					activeVersion: true,
+				},
 			},
-			false,
-		);
+		});
 	}
 
 	async deleteAll(trx?: EntityManager) {
-		return await withTransaction(this.manager, trx, async (em) => {
-			return await em.createQueryBuilder().delete().from(ChatHubSession).execute();
-		});
+		const em = trx ?? this.manager;
+		return await em.createQueryBuilder().delete().from(ChatHubSession).execute();
 	}
 }
