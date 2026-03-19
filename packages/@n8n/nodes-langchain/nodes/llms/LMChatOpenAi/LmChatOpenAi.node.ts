@@ -543,9 +543,14 @@ export class LmChatOpenAi implements INodeType {
 						name: 'reasoningEffort',
 						default: 'medium',
 						description:
-							'Controls the amount of reasoning tokens to use. A value of "low" will favor speed and economical token usage, "high" will favor more complete reasoning at the cost of more tokens generated and slower responses.',
+							'Controls the amount of reasoning tokens to use. A value of "minimal" or "low" will favor speed and economical token usage, while "high" will favor more complete reasoning at the cost of more tokens generated and slower responses.',
 						type: 'options',
 						options: [
+							{
+								name: 'Minimal',
+								value: 'minimal',
+								description: 'Favors the fastest and cheapest reasoning path',
+							},
 							{
 								name: 'Low',
 								value: 'low',
@@ -566,6 +571,55 @@ export class LmChatOpenAi implements INodeType {
 						displayOptions: {
 							show: {
 								// reasoning_effort is only available on o1, o1-versioned, or on o3-mini and beyond, and gpt-5 models. Not on o1-mini or other GPT-models.
+								'/model': [{ _cnd: { regex: '(^o1([-\\d]+)?$)|(^o[3-9].*)|(^gpt-5.*)' } }],
+							},
+						},
+					},
+					{
+						displayName: 'Reasoning',
+						name: 'reasoning',
+						type: 'fixedCollection',
+						default: { reasoningOptions: [{ effort: 'medium', summary: 'none' }] },
+						options: [
+							{
+								displayName: 'Reasoning',
+								name: 'reasoningOptions',
+								values: [
+									{
+										displayName: 'Effort',
+										name: 'effort',
+										type: 'options',
+										default: 'medium',
+										description:
+											'Controls how much reasoning to use. Newer models support minimal, low, medium, and high.',
+										options: [
+											{ name: 'Minimal', value: 'minimal' },
+											{ name: 'Low', value: 'low' },
+											{ name: 'Medium', value: 'medium' },
+											{ name: 'High', value: 'high' },
+										],
+									},
+									{
+										displayName: 'Summary',
+										name: 'summary',
+										type: 'options',
+										default: 'none',
+										description:
+											"A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process.",
+										options: [
+											{ name: 'None', value: 'none' },
+											{ name: 'Auto', value: 'auto' },
+											{ name: 'Concise', value: 'concise' },
+											{ name: 'Detailed', value: 'detailed' },
+										],
+									},
+								],
+							},
+						],
+						displayOptions: {
+							show: {
+								'@version': [{ _cnd: { gte: 1.3 } }],
+								'/responsesApiEnabled': [true],
 								'/model': [{ _cnd: { regex: '(^o1([-\\d]+)?$)|(^o[3-9].*)|(^gpt-5.*)' } }],
 							},
 						},
@@ -779,7 +833,10 @@ export class LmChatOpenAi implements INodeType {
 			Object.assign(modelKwargs, kwargs);
 		} else {
 			if (options.responseFormat) modelKwargs.response_format = { type: options.responseFormat };
-			if (options.reasoningEffort && ['low', 'medium', 'high'].includes(options.reasoningEffort)) {
+			if (
+				options.reasoningEffort &&
+				['minimal', 'low', 'medium', 'high'].includes(options.reasoningEffort)
+			) {
 				modelKwargs.reasoning_effort = options.reasoningEffort;
 			}
 		}

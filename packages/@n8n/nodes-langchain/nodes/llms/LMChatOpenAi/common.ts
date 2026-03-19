@@ -9,6 +9,7 @@ import type {
 	ChatResponseRequest,
 	ModelOptions,
 	PromptOptions,
+	ReasoningOptions,
 	TextOptions,
 } from './types';
 
@@ -144,6 +145,15 @@ export const prepareAdditionalResponsesParams = (options: ModelOptions) => {
 		body.reasoning = {
 			effort: options.reasoningEffort,
 		};
+	}
+
+	if (options.reasoning) {
+		const reasoning = get(options, 'reasoning.reasoningOptions') as ReasoningOptions;
+		body.reasoning = removeEmptyProperties({
+			...body.reasoning,
+			effort: reasoning.effort,
+			summary: reasoning.summary && reasoning.summary !== 'none' ? reasoning.summary : undefined,
+		});
 	}
 
 	return body;

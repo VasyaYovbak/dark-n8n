@@ -23,7 +23,10 @@ export type ModelOptions = {
 	responseFormat?: 'text' | 'json_object';
 	presencePenalty?: number;
 	temperature?: number;
-	reasoningEffort?: 'low' | 'medium' | 'high';
+	reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+	reasoning?: {
+		reasoningOptions?: ReasoningOptions;
+	};
 	timeout?: number;
 	maxRetries?: number;
 	topP?: number;
@@ -45,6 +48,13 @@ export type PromptOptions = {
 	promptId?: string;
 	version?: string;
 	variables?: string;
+};
+
+export type ReasoningSummary = 'none' | 'auto' | 'concise' | 'detailed';
+
+export type ReasoningOptions = {
+	effort?: 'minimal' | 'low' | 'medium' | 'high';
+	summary?: ReasoningSummary;
 };
 
 export type TextOptions = {
