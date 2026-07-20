@@ -280,6 +280,7 @@
     "mongodb": "^6.17.0",
     "n8n-nodes-base": "workspace:*",
     "n8n-workflow": "workspace:*",
+    "node-ssh": "13.2.0",
     "openai": "^6.9.0",
     "pdf-parse": "1.1.1",
     "pg": "catalog:",

@@ -53,7 +53,7 @@ return [ {json: { output } } ];`;
 const defaultCodeSupplyData = `const { WikipediaQueryRun } = require( '@langchain/community/tools/wikipedia_query_run');
 return new WikipediaQueryRun();`;
 
-const langchainModules = ['langchain', '@langchain/*'];
+const langchainModules = ['langchain', '@langchain/*', 'node-ssh'];
 export const vmResolver = makeResolverFromLegacyOptions({
 	external: {
 		modules: external ? [...langchainModules, ...external.split(',')] : [...langchainModules],
@@ -67,7 +67,7 @@ export const vmResolver = makeResolverFromLegacyOptions({
 		}
 		return;
 	},
-	builtin: builtIn?.split(',') ?? [],
+	builtin: ['string_decoder', ...(builtIn?.split(',') ?? [])],
 });
 
 function getSandbox(
@@ -82,6 +82,7 @@ function getSandbox(
 	const context = getSandboxContext.call(this, itemIndex);
 	context.addInputData = this.addInputData.bind(this);
 	context.addOutputData = this.addOutputData.bind(this);
+	context.getCredentials = this.getCredentials.bind(this);
 	context.getInputConnectionData = this.getInputConnectionData.bind(this);
 	context.getInputData = this.getInputData.bind(this);
 	context.getNode = this.getNode.bind(this);
@@ -122,10 +123,18 @@ export class DarkCode implements INodeType {
 		defaults: {
 			name: 'Dark LangChain Code',
 		},
+		credentials: [
+			{
+				// eslint-disable-next-line n8n-nodes-base/node-class-description-credentials-name-unsuffixed -- Reuse the core SSH credential type.
+				name: 'sshPassword',
+				required: false,
+			},
+		],
 		codex: {
-			categories: ['AI'],
+			alias: ['Dark Code', 'DarkCode', 'Code', 'JavaScript', 'JS', 'LangChain', 'SSH', 'OpenCode'],
+			categories: ['Development', 'Core Nodes'],
 			subcategories: {
-				AI: ['Miscellaneous'],
+				'Core Nodes': ['Helpers', 'Data Transformation'],
 			},
 			resources: {
 				primaryDocumentation: [
